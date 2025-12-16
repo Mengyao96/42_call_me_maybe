@@ -1,0 +1,94 @@
+curl -LsSf https://astral.sh/uv/install.sh | sh
+    curl - 用于下载文件的命令行工具
+    -LsSf - 参数组合：
+    -L - 跟随重定向
+    -s - 静默模式（不显示进度条）
+    -S - 显示错误信息
+    -f - 失败时不输出内容
+    https://astral.sh/uv/install.sh - 安装脚本的下载地址
+    | sh - 将下载的脚本通过管道传递给 shell 执行
+
+
+普通依赖 = 用户运行你的程序需要的
+开发依赖 = 你开发时需要的（测试、格式化、类型检查等）
+用 uv init 会自动生成"
+    必须安装的包： numpy（数学计算）, pydantic（数据验证）, requests。- uv add numpy pydantic
+    必须安装的工具（开发环境）： flake8, mypy. uv add --dev flake8 mypy
+    禁止使用的包： dspy, pytorch (直接调用), huggingface, transformers, outlines 等。
+dependencies 是你程序跑起来必须有的；dev-dependencies 是你写代码时检查错误用的
+linting 工具（flake8）、类型检查（mypy）、测试框架（pytest）等
+
+
+uv 在性能和现代化方面更优秀，特别适合：
+    大型项目
+    需要频繁安装依赖的场景
+    追求效率的开发者
+    但 virtualenv + pip 仍然是最广泛使用和兼容的方案。
+
+curl 和 pip 没有关系
+
+curl 用于下载和安装 uv 本身
+    pip 用于安装 Python 包
+    它们是不同层次的工具
+    使用 curl 是因为 uv 不是 Python 包
+
+uv 是一个独立的系统工具（类似 git、docker）
+    不能用 pip install uv（虽然有 Python 包装版本，但推荐用独立安装）
+    所以需要用 curl 下载安装脚本
+
+Mypy: 检查类型安全 (Type Safety)。Python 默认是动态类型的（随便传参），这在大项目中是灾难。Mypy 强迫你像写 C 一样声明类型，并在运行前检查是否有“把字符串传给整数函数”这种错误
+
+类似于 C++ 的 RAII (Resource Acquisition Is Initialization)。 在 C 中，你 open() 必须记得 close()，否则会内存泄漏或文件锁死。在 Python 中，with 帮你自动 close()，即使中间程序崩了（Exception）也会关掉
+    # [Python 风格 - 推荐]
+    with open("data.txt", "r") as f:
+        content = f.read()
+    # 出了这个缩进块，f 自动关闭。
+
+必须提交 pyproject.toml 和 uv.lock 。评审人会运行 uv sync 来还原你的环境。
+
+
+uv run python -m src.main
+# 或者如果你的文件叫 src/main.py
+uv run python src/main.py
+
+
+什么时候用 from x import y，什么时候用 import x？ 这主要是方便程度的区别。
+直接导入整个包:
+    import json
+    data = json.loads(string) # 必须带前缀 json.
+    导入特定函数 (推荐):
+
+from typing import List, Dict # 类型提示专用
+from llm_sdk import Small_LLM_Model # 只导入这一个类
+
+model = Small_LLM_Model() # 不需要写 llm_sdk.Small_LLM_Model
+
+-m 是什么意思？
+普通运行 (python src/main.py): 告诉 Python 解释器：“去这个路径找文件，直接执行它。”
+模块运行 (python -m src): 告诉 Python 解释器：“把 src 当作一个软件包 (Package) 或者是模块 (Module) 来运行。
+
+if __name__ == "__main__": 是什么？
+这是 Python 的入口保护（Gatekeeper）。
+当一个文件被直接运行时，Python 会把内置变量 __name__ 赋值为 "__main__"。
+当一个文件被import（作为库导入）时，__name__ 就是文件名（例如 "src.main"）。
+作用：防止代码在被导入时意外执行。这类似 C 语言里的 main() 函数，但 Python 需要你手动写这个判断。
+
+
+第一步：删除当前已经坏掉的环境
+# 确保你在项目根目录下 (CMM_42)
+rm -rf .venv
+第二步：在 goinfre 创建真正的环境存放处
+# 在 goinfre 里找个地方放环境
+mkdir -p /goinfre/$USER/envs/cmm_env
+第三步：建立软链接 (Symlink)
+这是魔法所在。我们在项目里放一个叫 .venv 的快捷方式，指向 /goinfre。
+# ln -s [真实地址] [快捷方式名]
+ln -s /goinfre/$USER/envs/cmm_env .venv
+第四步：再次运行 Sync
+现在，uv 会以为它在往项目里写文件，但其实所有数据都流向了无限容量的 /goinfre。
+uv sync
+
+rm -rf ~/.cache/uv                  
+mkdir -p /goinfre/$USER/uv_cache
+建立连接（告诉系统，往 .cache/uv 写东西其实就是往 goinfre 写）：
+ln -s /goinfre/$USER/uv_cache ~/.cache/uv 
