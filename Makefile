@@ -1,14 +1,8 @@
-# **************************************************************************** #
-#                                                                              #
-#                                                         :::      ::::::::    #
-#    Makefile                                           :+:      :+:    :+:    #
-#                                                     +:+ +:+         +:+      #
-#    By: mezhang <mezhang@student.42heilbronn.de    +#+  +:+       +#+         #
-#                                                 +#+#+#+#+#+   +#+            #
-#    Created: 2025/12/16 16:08:37 by mezhang           #+#    #+#              #
-#    Updated: 2025/12/16 16:45:27 by mezhang          ###   ########.fr        #
-#                                                                              #
-# **************************************************************************** #
+
+
+# 变量定义
+SRC_DIR = src
+PYTHON_CMD = uv run python
 
 install:
 	@echo "Installing project dependencies..."
@@ -25,7 +19,8 @@ debug:
 clean:
 	@echo "Cleaning up..."
 	rm -rf __pycache__
-	rm -rf ${SRC_DIR}/__pycache__
+	rm -rf $(SRC_DIR)/__pycache__
+	rm -rf llm_sdk/__pycache__
 	rm -rf .mypy_cache
 	rm -rf .pytest_cache
 	rm -rf .ruff_cache
