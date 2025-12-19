@@ -6,40 +6,6 @@ from pydantic import BaseModel #3rd party libraries to define data structure
 from llm_sdk import Small_LLM_Model
 import numpy as np
 
-# def main():
-#     llm = Small_LLM_Model()  # 修复：直接实例化，不要调用 __init__()
-#     prompt = "What is 2 + 2?"
-#     tokens_tensor = llm._encode(prompt)
-
-#     logits = llm.get_logits_from_input_ids(tokens_tensor[0].tolist())
-#     print(f"Encoded tokens: {tokens_tensor}")
-#     print(f"Logits for next token: {logits}")
-
-#     highest_logit_index = logits.index(max(logits))
-#     next_token = llm._decode([highest_logit_index])
-#     print(f"Predicted next token: {next_token}")
-
-
-# def handle_each_prompt(prompt):
-    
-#     tokens_tensor = llm._encode(prompt)
-
-#     logits = llm.get_logits_from_input_ids(tokens_tensor[0].tolist())
-#     while max(logits) < 0:
-#         next_token = verify_and_get_next_token(llm, logits)
-#         prompt += next_token
-#         tokens_tensor = llm._encode(prompt)
-#         logits = llm.get_logits_from_input_ids(tokens_tensor[0].tolist())
-    
-
-# "prompt": "What is the sum of 2 and 3?",
-# "fn_name": "fn_add_numbers",
-# "args": {"a": 2.0, "b": 3.0}
-
-# "prompt": "Reverse the string 'hello'",
-# "fn_name": "fn_reverse_string",
-# "args": {"s": "hello"}
-
 def build_tool_dict(schema):
     tool_dict = {}
     for unit in schema:
@@ -78,70 +44,193 @@ def get_next_tokenid(llm, allowed_ids, input_ids):
     
     return best_id
 
+def get_func_name(llm, system_prompt, current_json, tools_dict):
+    """
+    生成函数名并返回函数名和更新后的 JSON 字符串
+    
+    参数:
+        llm: 语言模型实例
+        system_prompt: 系统提示词
+        current_json: 当前 JSON 字符串
+        tools_dict: 工具字典
+    
+    返回:
+        (func_name, current_json): 函数名和更新后的 JSON 字符串
+    """
+    # === 第一步：生成函数名 ===
+    # 为每个函数名生成 token 序列
+    func_name_tokens = {}
+    for fn_name in tools_dict.keys():
+        # 编码函数名，得到 token 列表
+        tokens = llm._encode(fn_name)[0].tolist()
+        func_name_tokens[fn_name] = tokens
+
+    full_context = system_prompt + current_json
+    input_ids = llm._encode(full_context)[0].tolist()
+    
+    generated_func_name = ""
+    max_func_name_length = max(len(tokens) for tokens in func_name_tokens.values())
+
+    for token_pos in range(max_func_name_length):
+        # 找出在当前位置，哪些函数名还是候选
+        allowed_token_ids = set()
+        
+        for fn_name, tokens in func_name_tokens.items():
+            # 检查已生成的部分是否匹配这个函数名的开头
+            if token_pos < len(tokens):
+                # 检查前面的 token 是否匹配
+                current_tokens = llm._encode(generated_func_name)[0].tolist() if generated_func_name else []
+                expected_tokens = tokens[:token_pos]
+                
+                if current_tokens == expected_tokens or token_pos == 0:
+                    # 这个函数名还是候选，允许它的下一个 token
+                    allowed_token_ids.add(tokens[token_pos])
+        
+        if not allowed_token_ids:
+            break
+        
+        # 从允许的 token 中选择最优的
+        next_token_id = get_next_tokenid(llm, list(allowed_token_ids), input_ids)
+        next_token_str = llm._decode([next_token_id])
+        
+        generated_func_name += next_token_str
+        current_json += next_token_str  # 修改局部变量
+        
+        # 更新上下文
+        full_context = system_prompt + current_json
+        input_ids = llm._encode(full_context)[0].tolist()
+        
+        # 检查是否完整匹配了某个函数名
+        if generated_func_name in tools_dict:
+            break
+    
+    func_name = generated_func_name
+    print(f"Predicted function name: {func_name}\n")
+    
+    # 🔑 关键：返回函数名和更新后的 current_json
+    return func_name, current_json
+
+
+
+
 def constrained_generation(llm, prompt, schema, voca_map):
     tools_dict = build_tool_dict(schema)
 
     # 构建完整的提示词，告诉模型要生成 JSON 格式的函数调用
+    # 关键：让模型从 prompt 中提取参数值
     system_prompt = (
-        f"User query: {prompt}\n"
+        f"Extract function call from query.\n"
+        f"Query: {prompt}\n"
         f"Available functions: {list(tools_dict.keys())}\n"
-        f"Output a JSON function call in this format: {{\"fn_name\": \"function_name\", \"args\": {{...}}}}\n"
-        f"JSON: {{"
+        f"Extract exact values from the query and format as JSON.\n"
+        f"JSON: "
     )
     
     current_json = '{"fn_name": "'
 
-    # 收集允许的函数名 token IDs
-    allowed_func_ids = []
-    for fn_name in tools_dict.keys():
-        func_id = get_str_id(voca_map, fn_name)
-        if func_id is not None:
-            allowed_func_ids.append(func_id)
+    # === 第一步：生成函数名 ===
+    func_name, current_json = get_func_name(llm, system_prompt, current_json, tools_dict)
 
-    # 使用完整的提示词（包括指令）进行编码
-    input_ids = llm._encode(system_prompt + '"fn_name": "')[0].tolist()
-
-    func_id = get_next_tokenid(llm, allowed_func_ids, input_ids)
-    func_name = llm._decode([func_id])
-
-    print(f"Predicted function name: {func_name} \n")
-
-    # 更新 current_json 和 input_ids
-    current_json += func_name
-    # 重新构建完整的上下文，包括已生成的函数名
-    full_context = system_prompt + current_json + '", "args": {'
-    input_ids = llm._encode(full_context)[0].tolist()
-
+    # === 第二步：生成参数 ===
     transition_str = '", "args": {'
     current_json += transition_str
+    
+    full_context = system_prompt + current_json
+    input_ids = llm._encode(full_context)[0].tolist()
 
     if func_name in tools_dict:
         args_names = tools_dict[func_name]["args_names"]
         args_types = tools_dict[func_name]["args_types"]
-        print(f"Function arguments: {args_names} \n")
-        print(f"Function argument types: {args_types} \n")
 
         for i, arg_name in enumerate(args_names):
-            current_json += f'"{arg_name}"'
+            current_json += f'"{arg_name}": '
             
             # 更新完整上下文
-            full_context = system_prompt + current_json + ': '
+            full_context = system_prompt + current_json
             input_ids = llm._encode(full_context)[0].tolist()
 
             arg_type = args_types.get(arg_name, "str")
-            if arg_type in ["float", "int"]:
-                allowed_val_ids = get_num_ids(voca_map)
-            else:
-                allowed_val_ids = range(len(voca_map))  # allow all tokens for string
             
-            val_id = get_next_tokenid(llm, allowed_val_ids, input_ids)
-            val_str = llm._decode([val_id])
-            current_json += f": {val_str}"
+            # 根据参数类型生成值
+            if arg_type in ["float", "int"]:
+                # 对于数字类型，需要逐个 token 生成完整的数字
+                generated_value = ""
+                max_number_tokens = 5  # 限制为 5 个 token（避免生成过长数字）
+                
+                for token_idx in range(max_number_tokens):
+                    allowed_val_ids = get_num_ids(voca_map)
+                    
+                    if not allowed_val_ids:
+                        break
+                    
+                    val_id = get_next_tokenid(llm, allowed_val_ids, input_ids)
+                    val_token = llm._decode([val_id])
+                    
+                    # 只保留数字和小数点字符
+                    clean_token = ''.join(c for c in val_token if c in '0123456789.')
+                    
+                    # 如果 token 为空或包含非数字字符，停止
+                    if not clean_token:
+                        break
+                    
+                    generated_value += clean_token
+                    current_json += clean_token
+                    
+                    # 更新上下文继续生成
+                    full_context = system_prompt + current_json
+                    input_ids = llm._encode(full_context)[0].tolist()
+                    
+                    # 检查下一个最可能的 token
+                    next_logits = llm.get_logits_from_input_ids(input_ids)
+                    next_best_id = next_logits.index(max(next_logits))
+                    next_token = llm._decode([next_best_id])
+                    
+                    # 如果下一个 token 不是数字，停止
+                    if not any(c in next_token for c in '0123456789.'):
+                        break
+                
+                # 如果没生成任何数字，使用默认值
+                if not generated_value:
+                    generated_value = "0"
+                    current_json += "0"
+                    
+            else:
+                # 对于字符串类型，生成带引号的字符串
+                current_json += '"'
+                full_context = system_prompt + current_json
+                input_ids = llm._encode(full_context)[0].tolist()
+                
+                generated_value = ""
+                max_string_tokens = 15  # 限制字符串长度
+                
+                for token_idx in range(max_string_tokens):
+                    # 允许所有 token
+                    allowed_val_ids = range(len(voca_map))
+                    
+                    val_id = get_next_tokenid(llm, allowed_val_ids, input_ids)
+                    val_token = llm._decode([val_id])
+                    
+                    # 如果遇到引号或逗号，说明参数值结束
+                    if '"' in val_token or ',' in val_token or '}' in val_token:
+                        break
+                    
+                    generated_value += val_token
+                    current_json += val_token
+                    
+                    # 更新上下文
+                    full_context = system_prompt + current_json
+                    input_ids = llm._encode(full_context)[0].tolist()
+                
+                current_json += '"'
 
             if i < len(args_names) - 1:
                 current_json += ", "
 
-        current_json += "}"
+        current_json += "}}"  # 关闭 args 和整个 JSON
+
+    else:
+        # 如果函数名不在字典中，关闭 JSON
+        current_json += "}}"
 
     try:
         return json.loads(current_json)
